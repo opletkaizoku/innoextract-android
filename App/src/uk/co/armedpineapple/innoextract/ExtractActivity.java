@@ -22,32 +22,40 @@
 
 package uk.co.armedpineapple.innoextract;
 
-import java.io.File;
-
-import net.rdrei.android.dirchooser.DirectoryChooserActivity;
-
+import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
-import android.app.Activity;
-import android.content.Intent;
 import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.Toast;
+import net.rdrei.android.dirchooser.DirectoryChooserActivity;
+
+import java.io.File;
+import java.util.List;
+
+import static android.content.Intent.createChooser;
 
 public class ExtractActivity extends Activity {
 
-    public static final int REQUEST_CODE = 111;
+    public static final int REQUEST_DIR_CODE = 1;
+    public static final int REQUEST_FILE_CODE = 2;
     private final String LOG_TAG = "ExtractActivity";
 
     EditText extractToEditText;
+    EditText extractFileEditText;
+
     Button extractButton;
     Button cancelButton;
-    Button browseButton;
+    Button browseDirButton;
+    Button browseFileButton;
 
-    String fileToExtract;
 
     public native int nativeCheckInno(String sourceFile);
 
@@ -59,37 +67,48 @@ public class ExtractActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        String fileToExtract = "";
+
         Intent intent = getIntent();
+
         Uri uri = intent.getData();
 
-        fileToExtract = uri.getPath();
-        int fileState = nativeCheckInno(uri.getPath());
+        if (uri != null) {
+            // Check if launched with a URI
+            fileToExtract = uri.getPath();
 
-        if (fileState > 0) {
-            // Error
-            setContentView(R.layout.dialog_error);
-            Button closeButton = (Button) findViewById(R.id.closeBtn);
-            closeButton.setOnClickListener(new OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    finish();
-                }
-            });
+            int fileState = nativeCheckInno(uri.getPath());
 
-            return;
+            if (fileState > 0) {
+                // Error
+                setContentView(R.layout.dialog_error);
+                Button closeButton = (Button) findViewById(R.id.closeBtn);
+                closeButton.setOnClickListener(new OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        finish();
+                    }
+                });
+
+                return;
+            }
         }
 
+        // Was not launched with a URI
         setContentView(R.layout.dialog_layout);
 
         extractToEditText = (EditText) findViewById(R.id.extract_to);
-        extractButton = (Button) findViewById(R.id.extract);
-        cancelButton = (Button) findViewById(R.id.cancel);
-        browseButton = (Button) findViewById(R.id.browse);
+        extractFileEditText = (EditText) findViewById(R.id.extract_file);
+        extractButton = (Button) findViewById(R.id.btnExtract);
+        cancelButton = (Button) findViewById(R.id.btnCancel);
+        browseDirButton = (Button) findViewById(R.id.btnBrowseDir);
+        browseFileButton = (Button) findViewById(R.id.btnBrowseFile);
 
         String extDir;
+        extractFileEditText.setText(fileToExtract);
 
-        if (Environment.getExternalStorageState().equals(
-                Environment.MEDIA_MOUNTED)) {
+        if (Environment.getExternalStorageState()
+                .equals(Environment.MEDIA_MOUNTED)) {
             extDir = Environment.getExternalStorageDirectory()
                     .getAbsolutePath();
         } else {
@@ -115,7 +134,7 @@ public class ExtractActivity extends Activity {
             }
         });
 
-        browseButton.setOnClickListener(new OnClickListener() {
+        browseDirButton.setOnClickListener(new OnClickListener() {
 
             @Override
             public void onClick(View v) {
@@ -123,15 +142,41 @@ public class ExtractActivity extends Activity {
             }
 
         });
+
+        browseFileButton.setOnClickListener(new OnClickListener() {
+            @Override public void onClick(View v) {
+                showChooseFile();
+            }
+        });
+    }
+
+    private void showChooseFile() {
+        PackageManager manager = getPackageManager();
+        Intent findFileIntent = new Intent();
+        findFileIntent.setAction(Intent.ACTION_GET_CONTENT);
+        findFileIntent.setType("application/*");
+        findFileIntent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+        findFileIntent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        Intent chooserIntent = createChooser(findFileIntent, "Choose a file");
+
+        List<ResolveInfo> infos = manager.queryIntentActivities(findFileIntent,
+                PackageManager.GET_RESOLVED_FILTER);
+        if (infos.size() == 0) {
+            Toast.makeText(this, "No compatible file managers are installed.",
+                    Toast.LENGTH_LONG).show();
+        } else {
+            startActivityForResult(chooserIntent, REQUEST_FILE_CODE);
+        }
     }
 
     private void doExtract() {
         Intent serviceIntent = new Intent(this, ExtractService.class);
-        serviceIntent.putExtra(ExtractService.EXTRACT_FILE_PATH, fileToExtract);
-        serviceIntent.putExtra(ExtractService.EXTRACT_FILE_NAME, new File(
-                fileToExtract).getName());
-        serviceIntent.putExtra(ExtractService.EXTRACT_DIR, extractToEditText
-                .getText().toString());
+        serviceIntent.putExtra(ExtractService.EXTRACT_FILE_PATH, extractFileEditText.getText());
+        serviceIntent.putExtra(ExtractService.EXTRACT_FILE_NAME,
+                new File(extractFileEditText.getText().toString()).getName());
+        serviceIntent.putExtra(ExtractService.EXTRACT_DIR,
+                extractToEditText.getText().toString());
         startService(serviceIntent);
 
     }
@@ -147,19 +192,24 @@ public class ExtractActivity extends Activity {
 
         // REQUEST_DIRECTORY is a constant integer to identify the
         // request, e.g. 0
-        startActivityForResult(chooserIntent, REQUEST_CODE);
+        startActivityForResult(chooserIntent, REQUEST_DIR_CODE);
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    protected void onActivityResult(int requestCode, int resultCode,
+            Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode == REQUEST_CODE) {
-            if (resultCode == DirectoryChooserActivity.RESULT_CODE_DIR_SELECTED) {
-                extractToEditText
-                        .setText(data
-                                .getStringExtra(DirectoryChooserActivity.RESULT_SELECTED_DIR));
+        if (requestCode == REQUEST_DIR_CODE) {
+            if (resultCode
+                    == DirectoryChooserActivity.RESULT_CODE_DIR_SELECTED) {
+                extractToEditText.setText(data.getStringExtra(
+                        DirectoryChooserActivity.RESULT_SELECTED_DIR));
             }
+        } else if (requestCode == REQUEST_FILE_CODE) {
+            Log.d(LOG_TAG, String.valueOf(resultCode));
+            Log.d(LOG_TAG, String.valueOf(data));
+
         }
 
     }
